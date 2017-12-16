@@ -17,7 +17,6 @@ const (
 	MAX_DEPTH uint8 = 29
 
 	ERR_INVALID_DEPTH = GeoTriError("Invalid depth. Max depth is 29.")
-	ERR_REACHED_SPHERE = GeoTriError("Reached the sphere root level")
 )
 
 /**
@@ -82,19 +81,19 @@ type GeoTri interface {
 }
 
 func NewGeoTri(path ...GeoTile) GeoTri {
-	depth := uint8(len(path))
-	if(depth == 0) {
+	n := uint8(len(path))
+	if(n == 0) {
 		return geoTriData{depth: uint8(NONE), code: uint64(0)}
 	}
-	if(depth > MAX_DEPTH) {
-		depth = MAX_DEPTH
+	if(n > MAX_DEPTH + 1) {
+		n = MAX_DEPTH + 1
 	}
 	var code uint64
-	for i := uint8(0); i < depth; i++ {
+	for i := uint8(0); i < n; i++ {
 		code = code << 2 + uint64(path[i])
 	}
-	code <<= (2 * (MAX_DEPTH - depth + 1))
-	return geoTriData{depth: uint8(depth), code: code}
+	code <<= (2 * (MAX_DEPTH - n + 1))
+	return geoTriData{depth: uint8(n - 1), code: code}
 }
 
 type geoTriData struct {
@@ -114,10 +113,11 @@ func (g geoTriData) FindNeighbor( dir GeoDirection ) GeoTri {
 	var nca, err = g.findNCA(dir)
 	var depth = nca.GetDepth()
 	fmt.Println("NCA: ", nca)
-	if(err == nil) {
+	if(depth != NONE) {
 		depth++
 	} else {
-		println(" err: ", err.Error())
+		depth = 0
+		println(" The NCA is the sphere.")
 	}
 	var next geoTriData
 	next, err = g.findNextSibling(dir, depth)
@@ -146,8 +146,8 @@ func (g geoTriData) GetPath() []GeoTile {
 	}
 	path := make([]GeoTile, g.GetDepth() + 1)
 	path[0], _ = g.GetTileAt(0)
-	for i := uint8(0); i < depth; i++ {
-		path[i + 1], _ = g.GetTileAt(i + 1)
+	for i := uint8(1); i < uint8(len(path)); i++ {
+		path[i], _ = g.GetTileAt(i)
 	}
 	return path
 }
@@ -172,13 +172,17 @@ func buildPathMask( depth uint8 ) uint64 {
 
 func (g geoTriData) String() string {
 	depth := g.GetDepth()
-	path := g.GetPath()
-	pathStr := make([]string, depth + 1)
-	pathStr[0] = string(fmt.Sprintf("%02X", path[0]))
-	for i := uint8(0); i < depth; i++ {
-		pathStr[i + 1] = string(fmt.Sprintf("%02b", path[i]))
+	pathname := "SPHERE"
+	if(depth != NONE) {
+		path := g.GetPath()
+		pathStr := make([]string, len(path))
+		pathStr[0] = fmt.Sprintf("%02d", path[0])
+		for i := uint8(1); i < uint8(len(path)); i++ {
+			pathStr[i] = fmt.Sprintf("%02b", path[i])
+		}
+		pathname = strings.Join(pathStr, ".")
 	}
-	return fmt.Sprintf("{ depth: %2d, code: %0#16X, path: %s }", depth, g.code, strings.Join(pathStr, "."))
+	return fmt.Sprintf("{ depth: %2d, code: %0#16X, path: %s }", depth, g.code, pathname)
 }
 
 func (g *geoTriData) setCodeAt( depth uint8, code GeoTile ) error {
@@ -237,7 +241,7 @@ func (g geoTriData) findNCA( dir GeoDirection ) (geoTriData, error) {
 			((topRow % 2 == 0) && (dir == SOUTH))) {
 			return g.AtDepth(0).(geoTriData), nil
 		}
-		return g.AtDepth(0).(geoTriData), ERR_REACHED_SPHERE
+		return NewGeoTri().(geoTriData), nil
 	}
 	return g.AtDepth(depth - 1).(geoTriData), nil
 }
@@ -245,18 +249,18 @@ func (g geoTriData) findNCA( dir GeoDirection ) (geoTriData, error) {
 //   EAST,   NORTH,  WEST
 var siblingTab = [][]GeoTile{
     {LEFT,   CENTER, RIGHT},  // VERT
-	{CENTER, LEFT,   VERT},   // LEFT
+	{CENTER, RIGHT,   VERT},   // LEFT
 	{RIGHT,  VERT,   LEFT},   // CENTER
-	{VERT,   RIGHT,  CENTER}, // RIGHT
+	{VERT,   LEFT,  CENTER}, // RIGHT
 }
 
 //   EAST,   NORTH,  WEST, SOUTH
 var siblingTop = [][]GeoTile{
-    {GeoTile(1), 15, 4, 5}, // 0
-	{GeoTile(2), 16, 0, 6}, // 1
-	{GeoTile(3), 17, 1, 7}, // 2
-	{GeoTile(4), 18, 2, 8}, // 3
-	{GeoTile(0), 19, 3, 9}, // 4
+    {GeoTile(1), 3, 4, 5}, // 0
+	{GeoTile(2), 4, 0, 6}, // 1
+	{GeoTile(3), 0, 1, 7}, // 2
+	{GeoTile(4), 1, 2, 8}, // 3
+	{GeoTile(0), 2, 3, 9}, // 4
 	{GeoTile(10), 0, 14, 10}, // 5
 	{GeoTile(11), 1, 10, 11}, // 6
 	{GeoTile(12), 2, 11, 12}, // 7
@@ -284,6 +288,15 @@ func (g geoTriData) findNextSibling( dir GeoDirection, depth_nca uint8 ) (geoTri
 		next_tile = siblingTab[tile_type][dir]
 	} else {
 		next_tile = siblingTop[tile_type][dir]
+		if(10 <= tile_type && tile_type <= 14 && g.GetDepth() > 0) {
+			subtile, _ := g.GetTileAt(depth_nca + 1)
+			if(subtile == 3) {
+				next_tile++
+				if(next_tile == 14) {
+					next_tile = 5
+				}
+			}
+		}
 	}
 	err = g.setCodeAt(depth_nca, GeoTile(next_tile))
 	if(err != nil) {
@@ -296,7 +309,7 @@ func (g geoTriData) findNextSibling( dir GeoDirection, depth_nca uint8 ) (geoTri
 var reflTop = [][]GeoTile {
     {GeoTile(VERT), VERT,  VERT},  // VERT
 	{GeoTile(NONE), LEFT,  RIGHT}, // LEFT
-	{GeoTile(NONE), VERT,  NONE},  // CENTER
+	{GeoTile(NONE), CENTER,  NONE},  // CENTER
 	{GeoTile(LEFT), RIGHT, NONE},  // RIGHT
 }
 
@@ -306,7 +319,7 @@ func (g geoTriData) followToNeighbor( dir GeoDirection, depth_nca uint8 ) (geoTr
 	tile_type, err := g.GetTileAt(depth_nca)
 	println(fmt.Sprintf("geo: %s", g.String()))
 	println(fmt.Sprintf("NCA tile: %d %06b", tile_type, tile_type))
-	if( depth_nca > 0 || ( 4 < tile_type && tile_type < 15)) {
+	if( depth_nca > 0 || ( 5 <= tile_type && tile_type <= 14)) {
 		for ( depth_nca < depth ) {
 			depth_nca++
 			tile_type, err = g.GetTileAt(depth_nca)
